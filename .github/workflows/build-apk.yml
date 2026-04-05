@@ -38,7 +38,7 @@ jobs:
           ./gradlew assembleDebug
 
       - name: Guardar el APK
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: mi-app-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
