@@ -1,0 +1,44 @@
+name: Build APK
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Construir la app web
+        run: npm run build
+
+      - name: Sincronizar con Android
+        run: npx cap sync android
+
+      - name: Instalar Java
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Construir el APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Guardar el APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: mi-app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
