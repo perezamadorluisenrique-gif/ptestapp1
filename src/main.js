@@ -478,9 +478,33 @@ document.addEventListener('DOMContentLoaded', () => {
      VENTAS
      ===================================================== */
   const Ventas = {
+    categoriaActiva: 'directa',
+
     init() {
-      document.getElementById('ventaFecha').value = hoy();
-      this.renderizarLista();
+      this.mostrarCategoria(this.categoriaActiva);
+    },
+    mostrarCategoria(categoria) {
+      const categoriasValidas = ['directa', 'mensajeria', 'pedidos'];
+      this.categoriaActiva = categoriasValidas.includes(categoria) ? categoria : 'directa';
+
+      document.querySelectorAll('.pestanas-ventas .filtro-btn').forEach(btn => {
+        btn.classList.toggle('activo', btn.dataset.categoriaVenta === this.categoriaActiva);
+      });
+
+      document.getElementById('subvistaVentaDirecta').classList.toggle('oculta', this.categoriaActiva !== 'directa');
+      document.getElementById('subvistaMensajeria').classList.toggle('oculta', this.categoriaActiva !== 'mensajeria');
+      document.getElementById('subvistaPedidos').classList.toggle('oculta', this.categoriaActiva !== 'pedidos');
+
+      if (this.categoriaActiva === 'directa') {
+        document.getElementById('ventaFecha').value = hoy();
+        this.renderizarLista();
+        return;
+      }
+      if (this.categoriaActiva === 'mensajeria') {
+        Mensajeria.init();
+        return;
+      }
+      Pedidos.init();
     },
     actualizarSugerencia() {
       const cfg      = DB.obtenerConfig();
@@ -729,8 +753,9 @@ document.addEventListener('DOMContentLoaded', () => {
       gastos:    'vistaGastos',
       produccion:'vistaProduccion',
       ventas:    'vistaVentas',
-      encargos:  'vistaEncargos',
     };
+
+    if (!mapa[vista]) return;
 
     document.getElementById(mapa[vista]).classList.remove('oculta');
     document.querySelector(`.nav-btn[data-vista="${vista}"]`).classList.add('activo');
@@ -741,7 +766,6 @@ document.addEventListener('DOMContentLoaded', () => {
       gastos:     () => Gastos.init(),
       produccion: () => Produccion.init(),
       ventas:     () => Ventas.init(),
-      encargos:   () => Mensajeria.init(),
     };
     if (acciones[vista]) acciones[vista]();
     document.getElementById('main').scrollTop = 0;
@@ -796,17 +820,11 @@ document.addEventListener('DOMContentLoaded', () => {
     Dashboard.periodoActivo = btn.dataset.periodo;
     Dashboard.renderizar();
   });
-
-  // --- Pestañas encargos ---
-  document.querySelector('.pestanas-encargos').addEventListener('click', e => {
+  // --- Categorias de ventas ---
+  document.querySelector('.pestanas-ventas').addEventListener('click', e => {
     const btn = e.target.closest('.filtro-btn');
     if (!btn) return;
-    document.querySelectorAll('.pestanas-encargos .filtro-btn').forEach(b => b.classList.remove('activo'));
-    btn.classList.add('activo');
-    const esMensajeria = btn.dataset.pestana === 'mensajeria';
-    document.getElementById('subvistaMensajeria').classList.toggle('oculta', !esMensajeria);
-    document.getElementById('subvistaPedidos').classList.toggle('oculta', esMensajeria);
-    if (esMensajeria) Mensajeria.init(); else Pedidos.init();
+    Ventas.mostrarCategoria(btn.dataset.categoriaVenta);
   });
 
   // --- Formularios ---

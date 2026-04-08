@@ -219,6 +219,7 @@ html, body {
    ===================================================== */
 .filtros-periodo,
 .pestanas-encargos,
+.pestanas-ventas,
 .temas-row {
   display: flex;
   gap: 8px;

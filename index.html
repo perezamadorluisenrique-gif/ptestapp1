@@ -83,34 +83,35 @@
 
     <!-- VISTA: VENTAS -->
     <section class="vista oculta" id="vistaVentas">
-      <div class="card formulario-card">
-        <h3 class="formulario-card__titulo">Nueva venta</h3>
-        <input type="number" id="ventaUnidades" class="input" placeholder="Unidades" min="1">
-        <p class="sugerencia-precio" id="sugerenciaPrecio"></p>
-        <input type="number" id="ventaIngreso" class="input" placeholder="Ingreso recibido" step="0.01" min="0">
-        <input type="date" id="ventaFecha" class="input">
-        <button class="btn-primario" id="btnGuardarVenta">Guardar venta</button>
-      </div>
-      <div id="listaVentas" class="lista"></div>
-    </section>
-
-    <!-- VISTA: ENCARGOS -->
-    <section class="vista oculta" id="vistaEncargos">
-      <div class="pestanas-encargos">
-        <button class="filtro-btn activo" data-pestana="mensajeria">Mensajería</button>
-        <button class="filtro-btn" data-pestana="pedidos">Pedidos especiales</button>
+      <div class="pestanas-ventas">
+        <button class="filtro-btn activo" data-categoria-venta="directa">Venta directa</button>
+        <button class="filtro-btn" data-categoria-venta="mensajeria">Mensajer&iacute;a</button>
+        <button class="filtro-btn" data-categoria-venta="pedidos">Pedidos especiales</button>
       </div>
 
-      <!-- Subvista: Mensajería -->
-      <div id="subvistaMensajeria">
+      <!-- Subvista: Venta directa -->
+      <div id="subvistaVentaDirecta">
         <div class="card formulario-card">
-          <h3 class="formulario-card__titulo">Nuevo encargo</h3>
-          <input type="text" id="mensDesc" class="input" placeholder="Descripción del pedido">
+          <h3 class="formulario-card__titulo">Nueva venta</h3>
+          <input type="number" id="ventaUnidades" class="input" placeholder="Unidades" min="1">
+          <p class="sugerencia-precio" id="sugerenciaPrecio"></p>
+          <input type="number" id="ventaIngreso" class="input" placeholder="Ingreso recibido" step="0.01" min="0">
+          <input type="date" id="ventaFecha" class="input">
+          <button class="btn-primario" id="btnGuardarVenta">Guardar venta</button>
+        </div>
+        <div id="listaVentas" class="lista"></div>
+      </div>
+
+      <!-- Subvista: Mensajeria -->
+      <div id="subvistaMensajeria" class="oculta">
+        <div class="card formulario-card">
+          <h3 class="formulario-card__titulo">Nueva venta por mensajer&iacute;a</h3>
+          <input type="text" id="mensDesc" class="input" placeholder="Descripci&oacute;n del pedido">
           <input type="number" id="mensUnidades" class="input" placeholder="Unidades" min="1">
-          <input type="text" id="mensNombre" class="input" placeholder="Nombre — opcional">
-          <input type="text" id="mensTelefono" class="input" placeholder="Teléfono — opcional">
+          <input type="text" id="mensNombre" class="input" placeholder="Nombre &mdash; opcional">
+          <input type="text" id="mensTelefono" class="input" placeholder="Tel&eacute;fono &mdash; opcional">
           <input type="date" id="mensFecha" class="input">
-          <button class="btn-primario" id="btnGuardarMens">Guardar encargo</button>
+          <button class="btn-primario" id="btnGuardarMens">Guardar venta</button>
         </div>
         <div id="listaMensajeria" class="lista"></div>
       </div>
@@ -119,11 +120,11 @@
       <div id="subvistaPedidos" class="oculta">
         <div class="card formulario-card">
           <h3 class="formulario-card__titulo">Nuevo pedido especial</h3>
-          <input type="text" id="pedDesc" class="input" placeholder="Descripción">
+          <input type="text" id="pedDesc" class="input" placeholder="Descripci&oacute;n">
           <input type="number" id="pedUnidades" class="input" placeholder="Unidades" min="1">
           <input type="number" id="pedMonto" class="input" placeholder="Monto acordado" step="0.01" min="0">
-          <input type="text" id="pedNombre" class="input" placeholder="Nombre — opcional">
-          <input type="text" id="pedTelefono" class="input" placeholder="Teléfono — opcional">
+          <input type="text" id="pedNombre" class="input" placeholder="Nombre &mdash; opcional">
+          <input type="text" id="pedTelefono" class="input" placeholder="Tel&eacute;fono &mdash; opcional">
           <input type="date" id="pedFecha" class="input">
           <button class="btn-primario" id="btnGuardarPed">Guardar pedido</button>
         </div>
@@ -162,16 +163,6 @@
         <polyline points="17 6 23 6 23 12"/>
       </svg>
       <span>Ventas</span>
-    </button>
-    <button class="nav-btn" data-vista="encargos">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/>
-        <line x1="16" y1="13" x2="8" y2="13"/>
-        <line x1="16" y1="17" x2="8" y2="17"/>
-        <polyline points="10 9 9 9 8 9"/>
-      </svg>
-      <span>Encargos</span>
     </button>
   </nav>
 
