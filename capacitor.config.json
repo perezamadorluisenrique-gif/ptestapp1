@@ -1,5 +1,5 @@
 {
-  "appId": "com.tuempresa.miapp",
-  "appName": "Inventario Pro",
+  "appId": "com.tuempresa.croquetapp",
+  "appName": "CroquetApp",
   "webDir": "dist"
 }

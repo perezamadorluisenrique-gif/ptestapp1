@@ -1,4 +1,4 @@
-package com.tuempresa.miapp;
+package com.tuempresa.croquetapp;
 
 import com.getcapacitor.BridgeActivity;
 

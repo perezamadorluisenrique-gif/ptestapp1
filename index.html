@@ -1,188 +1,234 @@
 <!DOCTYPE html>
-<html lang="es" data-theme="dark">
+<html lang="es" data-tema="claro">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Inventario Pro</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./src/style.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>CroquetApp</title>
+  <link rel="stylesheet" href="/src/style.css">
 </head>
 <body>
- 
+
   <!-- HEADER -->
   <header class="header">
-    <div class="header-left">
-      <div class="logo">
-        <span class="logo-icon">▦</span>
-        <span class="logo-text">Inventario<b>Pro</b></span>
-      </div>
-    </div>
-    <div class="header-right">
-      <button class="theme-toggle" id="themeToggle" title="Cambiar tema">
-        <span class="theme-icon">☀</span>
-      </button>
-    </div>
-  </header>
- 
-  <!-- TABS -->
-  <nav class="tabs">
-    <button class="tab active" data-tab="inventario">
-      <span class="tab-icon">◫</span> Inventario
+    <span class="header__titulo">CroquetApp</span>
+    <button class="header__config" id="btnConfig" aria-label="Configuración">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
     </button>
-    <button class="tab" data-tab="finanzas">
-      <span class="tab-icon">◈</span> Finanzas
+  </header>
+
+  <!-- CONTENIDO PRINCIPAL -->
+  <main class="main" id="main">
+
+    <!-- VISTA: DASHBOARD -->
+    <section class="vista" id="vistaDashboard">
+      <div class="filtros-periodo" id="filtrosDashboard">
+        <button class="filtro-btn activo" data-periodo="semana">Semana</button>
+        <button class="filtro-btn" data-periodo="mes">Mes</button>
+        <button class="filtro-btn" data-periodo="todo">Todo</button>
+      </div>
+      <div class="balance-card">
+        <p class="balance-card__label">Balance neto</p>
+        <p class="balance-card__monto" id="balanceMonto">$0.00</p>
+      </div>
+      <div class="metricas-grid">
+        <div class="metrica-card">
+          <span class="metrica-card__valor" id="metricaProducidas">0</span>
+          <span class="metrica-card__label">Producidas</span>
+        </div>
+        <div class="metrica-card">
+          <span class="metrica-card__valor" id="metricaVendidas">0</span>
+          <span class="metrica-card__label">Vendidas</span>
+        </div>
+        <div class="metrica-card">
+          <span class="metrica-card__valor" id="metricaGastado">$0</span>
+          <span class="metrica-card__label">Gastado</span>
+        </div>
+      </div>
+      <div class="card grafico-card">
+        <h3 class="grafico-card__titulo">Ingresos vs Gastos</h3>
+        <canvas id="canvasBarras"></canvas>
+      </div>
+      <div class="card grafico-card">
+        <h3 class="grafico-card__titulo">Origen de ingresos</h3>
+        <canvas id="canvasPastel"></canvas>
+        <div id="leyendaPastel" class="leyenda-pastel"></div>
+      </div>
+    </section>
+
+    <!-- VISTA: GASTOS -->
+    <section class="vista oculta" id="vistaGastos">
+      <div class="card formulario-card">
+        <h3 class="formulario-card__titulo">Nuevo gasto</h3>
+        <input type="text" id="gastoDesc" class="input" placeholder="Descripción">
+        <input type="number" id="gastoMonto" class="input" placeholder="Monto" step="0.01" min="0">
+        <input type="date" id="gastoFecha" class="input">
+        <button class="btn-primario" id="btnGuardarGasto">Guardar gasto</button>
+      </div>
+      <div id="listaGastos" class="lista"></div>
+    </section>
+
+    <!-- VISTA: PRODUCCIÓN -->
+    <section class="vista oculta" id="vistaProduccion">
+      <div class="card formulario-card">
+        <h3 class="formulario-card__titulo">Nueva tanda</h3>
+        <input type="number" id="prodUnidades" class="input" placeholder="Unidades" min="1">
+        <input type="date" id="prodFecha" class="input">
+        <button class="btn-primario" id="btnGuardarProd">Guardar tanda</button>
+      </div>
+      <div id="listaProduccion" class="lista"></div>
+    </section>
+
+    <!-- VISTA: VENTAS -->
+    <section class="vista oculta" id="vistaVentas">
+      <div class="card formulario-card">
+        <h3 class="formulario-card__titulo">Nueva venta</h3>
+        <input type="number" id="ventaUnidades" class="input" placeholder="Unidades" min="1">
+        <p class="sugerencia-precio" id="sugerenciaPrecio"></p>
+        <input type="number" id="ventaIngreso" class="input" placeholder="Ingreso recibido" step="0.01" min="0">
+        <input type="date" id="ventaFecha" class="input">
+        <button class="btn-primario" id="btnGuardarVenta">Guardar venta</button>
+      </div>
+      <div id="listaVentas" class="lista"></div>
+    </section>
+
+    <!-- VISTA: ENCARGOS -->
+    <section class="vista oculta" id="vistaEncargos">
+      <div class="pestanas-encargos">
+        <button class="filtro-btn activo" data-pestana="mensajeria">Mensajería</button>
+        <button class="filtro-btn" data-pestana="pedidos">Pedidos especiales</button>
+      </div>
+
+      <!-- Subvista: Mensajería -->
+      <div id="subvistaMensajeria">
+        <div class="card formulario-card">
+          <h3 class="formulario-card__titulo">Nuevo encargo</h3>
+          <input type="text" id="mensDesc" class="input" placeholder="Descripción del pedido">
+          <input type="number" id="mensUnidades" class="input" placeholder="Unidades" min="1">
+          <input type="text" id="mensNombre" class="input" placeholder="Nombre — opcional">
+          <input type="text" id="mensTelefono" class="input" placeholder="Teléfono — opcional">
+          <input type="date" id="mensFecha" class="input">
+          <button class="btn-primario" id="btnGuardarMens">Guardar encargo</button>
+        </div>
+        <div id="listaMensajeria" class="lista"></div>
+      </div>
+
+      <!-- Subvista: Pedidos especiales -->
+      <div id="subvistaPedidos" class="oculta">
+        <div class="card formulario-card">
+          <h3 class="formulario-card__titulo">Nuevo pedido especial</h3>
+          <input type="text" id="pedDesc" class="input" placeholder="Descripción">
+          <input type="number" id="pedUnidades" class="input" placeholder="Unidades" min="1">
+          <input type="number" id="pedMonto" class="input" placeholder="Monto acordado" step="0.01" min="0">
+          <input type="text" id="pedNombre" class="input" placeholder="Nombre — opcional">
+          <input type="text" id="pedTelefono" class="input" placeholder="Teléfono — opcional">
+          <input type="date" id="pedFecha" class="input">
+          <button class="btn-primario" id="btnGuardarPed">Guardar pedido</button>
+        </div>
+        <div id="listaPedidos" class="lista"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- BARRA DE NAVEGACIÓN -->
+  <nav class="nav-bar" id="navBar">
+    <button class="nav-btn activo" data-vista="dashboard">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+      </svg>
+      <span>Inicio</span>
+    </button>
+    <button class="nav-btn" data-vista="gastos">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="1" x2="12" y2="23"/>
+        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+      </svg>
+      <span>Gastos</span>
+    </button>
+    <button class="nav-btn" data-vista="produccion">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+        <polyline points="9 22 9 12 15 12 15 22"/>
+      </svg>
+      <span>Producción</span>
+    </button>
+    <button class="nav-btn" data-vista="ventas">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+        <polyline points="17 6 23 6 23 12"/>
+      </svg>
+      <span>Ventas</span>
+    </button>
+    <button class="nav-btn" data-vista="encargos">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="16" y1="13" x2="8" y2="13"/>
+        <line x1="16" y1="17" x2="8" y2="17"/>
+        <polyline points="10 9 9 9 8 9"/>
+      </svg>
+      <span>Encargos</span>
     </button>
   </nav>
- 
-  <!-- INVENTARIO TAB -->
-  <section class="tab-content active" id="tab-inventario">
- 
-    <!-- Barra de acciones -->
-    <div class="toolbar">
-      <div class="search-wrap">
-        <span class="search-icon">⌕</span>
-        <input type="text" id="searchInput" class="search-input" placeholder="Buscar producto...">
+
+  <!-- MODAL CONFIGURACIÓN -->
+  <div class="modal-overlay oculta" id="modalOverlay">
+    <div class="modal-sheet" id="modalSheet">
+      <div class="modal-sheet__header">
+        <h2 class="modal-sheet__titulo">Configuración</h2>
+        <button class="modal-sheet__cerrar" id="btnCerrarModal" aria-label="Cerrar">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
       </div>
-      <button class="btn-primary" id="btnAgregar">+ Agregar</button>
-    </div>
- 
-    <!-- Categorías -->
-    <div class="categorias" id="categoriasBar">
-      <button class="cat-pill active" data-cat="todas">Todas</button>
-    </div>
- 
-    <!-- Lista de productos -->
-    <div class="productos-grid" id="productosGrid">
-      <!-- Se llena con JS -->
-    </div>
- 
-    <div class="empty-state" id="emptyState" style="display:none;">
-      <div class="empty-icon">◫</div>
-      <p>No hay productos aún</p>
-      <span>Agrega tu primer producto con el botón de arriba</span>
-    </div>
- 
-  </section>
- 
-  <!-- FINANZAS TAB -->
-  <section class="tab-content" id="tab-finanzas">
- 
-    <div class="periodo-selector">
-      <button class="periodo-btn active" data-periodo="dia">Hoy</button>
-      <button class="periodo-btn" data-periodo="semana">Semana</button>
-      <button class="periodo-btn" data-periodo="mes">Mes</button>
-    </div>
- 
-    <div class="stats-grid">
-      <div class="stat-card accent">
-        <span class="stat-label">Ingresos</span>
-        <span class="stat-value" id="statIngresos">$0.00</span>
-        <span class="stat-sub" id="statPeriodo">Hoy</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-label">Ventas</span>
-        <span class="stat-value" id="statVentas">0</span>
-        <span class="stat-sub">Unidades vendidas</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-label">En inventario</span>
-        <span class="stat-value" id="statStock">0</span>
-        <span class="stat-sub">Productos activos</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-label">Valor inventario</span>
-        <span class="stat-value" id="statValor">$0.00</span>
-        <span class="stat-sub">Stock actual</span>
-      </div>
-    </div>
- 
-    <div class="section-title">Top productos vendidos</div>
-    <div class="top-productos" id="topProductos">
-      <div class="empty-finance">Sin ventas en este período</div>
-    </div>
- 
-    <div class="section-title">Historial de ventas</div>
-    <div class="historial" id="historialVentas">
-      <div class="empty-finance">Sin ventas registradas</div>
-    </div>
- 
-  </section>
- 
-  <!-- MODAL AGREGAR/EDITAR -->
-  <div class="modal-overlay" id="modalOverlay">
-    <div class="modal">
-      <div class="modal-header">
-        <span class="modal-title" id="modalTitle">Agregar producto</span>
-        <button class="modal-close" id="modalClose">✕</button>
-      </div>
-      <div class="modal-body">
-        <input type="hidden" id="productoId">
- 
-        <div class="form-group">
-          <label>Nombre del producto</label>
-          <input type="text" id="inputNombre" class="form-input" placeholder="Ej: Camisa azul talla M">
+
+      <div class="modal-seccion">
+        <p class="modal-seccion__label">Precio por croqueta</p>
+        <div class="precio-row">
+          <input type="number" id="configPrecio" class="input input--sm" placeholder="0.00" step="0.01" min="0">
+          <button class="btn-acento btn--sm" id="btnGuardarPrecio">OK</button>
         </div>
- 
-        <div class="form-row">
-          <div class="form-group">
-            <label>Precio de costo</label>
-            <input type="number" id="inputCosto" class="form-input" placeholder="0.00" min="0" step="0.01">
-          </div>
-          <div class="form-group">
-            <label>Precio de venta</label>
-            <input type="number" id="inputPrecio" class="form-input" placeholder="0.00" min="0" step="0.01">
-          </div>
+        <p class="precio-actual" id="precioActualTexto">Sin precio configurado</p>
+      </div>
+
+      <div class="modal-divisor"></div>
+
+      <div class="modal-seccion">
+        <p class="modal-seccion__label">Modo de vista</p>
+        <div class="temas-row">
+          <button class="filtro-btn activo" data-tema-btn="claro">Claro</button>
+          <button class="filtro-btn" data-tema-btn="oscuro">Oscuro</button>
+          <button class="filtro-btn" data-tema-btn="personalizado">Personalizar</button>
         </div>
- 
-        <div class="form-row">
-          <div class="form-group">
-            <label>Cantidad en stock</label>
-            <input type="number" id="inputStock" class="form-input" placeholder="0" min="0">
-          </div>
-          <div class="form-group">
-            <label>Categoría</label>
-            <input type="text" id="inputCategoria" class="form-input" placeholder="Ej: Ropa, Electrónica...">
-          </div>
-        </div>
- 
-        <div class="form-group">
-          <label>Descripción (opcional)</label>
-          <textarea id="inputDescripcion" class="form-input form-textarea" placeholder="Detalles adicionales..."></textarea>
+        <div id="panelColores" class="panel-colores oculta">
+          <label class="color-label">Color principal
+            <input type="color" id="colorPrimario" value="#1B4F72">
+          </label>
+          <label class="color-label">Fondo
+            <input type="color" id="colorFondo" value="#F9F7F4">
+          </label>
+          <label class="color-label">Acento
+            <input type="color" id="colorAcento" value="#E69B2F">
+          </label>
+          <button class="btn-primario btn--sm" id="btnAplicarColores">Aplicar colores</button>
         </div>
       </div>
-      <div class="modal-footer">
-        <button class="btn-secondary" id="btnCancelar">Cancelar</button>
-        <button class="btn-primary" id="btnGuardar">Guardar</button>
+
+      <div class="modal-divisor"></div>
+
+      <div class="modal-seccion">
+        <p class="modal-seccion__label">Datos</p>
+        <button class="btn-secundario" id="btnExportar">Exportar copia de seguridad</button>
       </div>
     </div>
   </div>
- 
-  <!-- MODAL VENDER -->
-  <div class="modal-overlay" id="modalVenderOverlay">
-    <div class="modal modal-sm">
-      <div class="modal-header">
-        <span class="modal-title">Registrar venta</span>
-        <button class="modal-close" id="modalVenderClose">✕</button>
-      </div>
-      <div class="modal-body">
-        <p class="vender-nombre" id="venderNombre">Producto</p>
-        <p class="vender-precio" id="venderPrecio">$0.00 por unidad</p>
-        <div class="form-group">
-          <label>¿Cuántas unidades vendiste?</label>
-          <input type="number" id="inputVenderCantidad" class="form-input" placeholder="1" min="1">
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn-secondary" id="btnVenderCancelar">Cancelar</button>
-        <button class="btn-vender" id="btnVenderConfirmar">✓ Confirmar venta</button>
-      </div>
-    </div>
-  </div>
- 
-  <!-- TOAST -->
-  <div class="toast" id="toast"></div>
- 
-  <script type="module" src="./src/main.js"></script>
+
+  <script type="module" src="/src/main.js"></script>
 </body>
 </html>
