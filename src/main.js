@@ -1,939 +1,959 @@
-document.addEventListener('DOMContentLoaded', () => {
+﻿import { createPastedDocument, delayMsForToken, extractDocument, splitOrpWord, tokenizeText } from './parsers.js';
+import { defaultSettings, settingsStore, storage } from './storage.js';
 
-  /* =====================================================
-     UTILIDADES
-     ===================================================== */
+const app = document.querySelector('#app');
+const fileInput = document.querySelector('#fileInput');
+const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
 
-  function generarId() {
-    return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const state = {
+  view: 'library',
+  loading: true,
+  busyMessage: '',
+  folders: [],
+  documents: [],
+  settings: settingsStore.load(),
+  sheet: { type: null, data: null },
+  reader: {
+    documentId: null,
+    tokens: [],
+    index: 0,
+    playing: false,
+    wpm: settingsStore.load().defaultWpm,
+    timerId: null,
+    lastSavedIndex: 0
+  },
+  longPressDocId: null
+};
+
+function escapeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatPercent(value) {
+  return `${Math.round(value)}%`;
+}
+
+function resolveTheme() {
+  if (state.settings.theme === 'auto') {
+    return prefersDark.matches ? 'dark' : 'light';
+  }
+  return state.settings.theme;
+}
+
+function applyTheme() {
+  document.documentElement.dataset.theme = resolveTheme();
+  document.body.dataset.view = state.view;
+  document.documentElement.style.setProperty('--orp-color', state.settings.orpColor);
+  document.documentElement.style.setProperty('--reader-font-size', `${state.settings.fontSize}px`);
+}
+
+function documentProgress(doc) {
+  if (!doc.tokenCount) {
+    return 0;
+  }
+  return Math.min(100, (doc.currentIndex / doc.tokenCount) * 100);
+}
+
+function folderDocuments(folderId) {
+  return state.documents.filter((doc) => (doc.folderId ?? null) === folderId);
+}
+
+function currentDocument() {
+  return state.documents.find((doc) => doc.id === state.reader.documentId) ?? null;
+}
+
+function setBusy(message) {
+  state.busyMessage = message;
+  render();
+}
+
+function clearBusy() {
+  state.busyMessage = '';
+  render();
+}
+
+function showSheet(type, data = null) {
+  state.sheet = { type, data };
+  render();
+}
+
+function closeSheet() {
+  state.sheet = { type: null, data: null };
+  render();
+}
+
+function toast(message) {
+  const node = document.createElement('div');
+  node.className = 'toast';
+  node.textContent = message;
+  document.body.append(node);
+  requestAnimationFrame(() => node.classList.add('toast--visible'));
+  setTimeout(() => {
+    node.classList.remove('toast--visible');
+    setTimeout(() => node.remove(), 220);
+  }, 2200);
+}
+
+async function refreshLibrary() {
+  const [folders, documents] = await Promise.all([
+    storage.getFolders(),
+    storage.getDocuments()
+  ]);
+  state.folders = folders;
+  state.documents = documents;
+  state.loading = false;
+  render();
+}
+
+function shellTemplate(content) {
+  return `
+    <div class="shell">
+      ${content}
+      ${sheetTemplate()}
+      ${state.busyMessage ? `<div class="busy"><div class="busy__card">${escapeHtml(state.busyMessage)}</div></div>` : ''}
+    </div>
+  `;
+}
+
+function libraryTemplate() {
+  const uncategorized = folderDocuments(null);
+  const hasContent = state.folders.length || uncategorized.length;
+
+  return shellTemplate(`
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Biblioteca local</p>
+        <h1>flowread</h1>
+      </div>
+      <button class="icon-button" data-open-settings aria-label="Abrir ajustes">⚙</button>
+    </header>
+
+    <main class="library">
+      <section class="toolbar">
+        <button class="primary-button" data-import-file>Subir archivo</button>
+        <button class="secondary-button" data-paste-text>Pegar texto</button>
+        <button class="secondary-button" data-create-folder>Nueva carpeta</button>
+      </section>
+
+      <section class="intro-card">
+        <p class="intro-card__title">Lectura RSVP</p>
+        <p class="intro-card__text">Una palabra por vez, ORP fijo, progreso guardado y extracción local de TXT, MD, PDF y EPUB.</p>
+      </section>
+
+      ${hasContent ? folderSectionsTemplate(uncategorized) : emptyLibraryTemplate()}
+    </main>
+  `);
+}
+
+function emptyLibraryTemplate() {
+  return `
+    <section class="empty-state">
+      <p class="empty-state__title">La biblioteca está vacía.</p>
+      <p class="empty-state__text">Importa un archivo o pega texto para empezar. Todo queda guardado solo en este dispositivo.</p>
+    </section>
+  `;
+}
+
+function folderSectionsTemplate(uncategorized) {
+  const folderSections = state.folders.map((folder) => {
+    const docs = folderDocuments(folder.id);
+    return `
+      <section class="folder-section">
+        <div class="folder-section__header" data-folder-id="${folder.id}">
+          <div>
+            <h2>${escapeHtml(folder.name)}</h2>
+            <p>${docs.length} archivo${docs.length === 1 ? '' : 's'}</p>
+          </div>
+          <button class="icon-button" data-folder-menu="${folder.id}" aria-label="Opciones de carpeta">⋯</button>
+        </div>
+        ${docs.length ? docs.map(documentCardTemplate).join('') : '<p class="folder-section__empty">Carpeta vacía.</p>'}
+      </section>
+    `;
+  }).join('');
+
+  const looseSection = `
+    <section class="folder-section">
+      <div class="folder-section__header">
+        <div>
+          <h2>Sin carpeta</h2>
+          <p>${uncategorized.length} archivo${uncategorized.length === 1 ? '' : 's'}</p>
+        </div>
+      </div>
+      ${uncategorized.length ? uncategorized.map(documentCardTemplate).join('') : '<p class="folder-section__empty">Aquí aparecen los archivos sueltos.</p>'}
+    </section>
+  `;
+
+  return `${folderSections}${looseSection}`;
+}
+
+function documentCardTemplate(doc) {
+  const progress = documentProgress(doc);
+  const folderName = doc.folderId ? state.folders.find((folder) => folder.id === doc.folderId)?.name ?? '' : '';
+
+  return `
+    <article class="doc-card" data-doc-id="${doc.id}">
+      <button class="icon-button doc-card__menu" data-doc-menu="${doc.id}" aria-label="Opciones del archivo">⋯</button>
+      <div class="doc-card__body">
+        <div class="doc-card__topline">
+          <h3>${escapeHtml(doc.title)}</h3>
+          <span class="badge">${escapeHtml(doc.format)}</span>
+        </div>
+        <p class="doc-card__meta">${doc.tokenCount.toLocaleString('es-ES')} palabras${folderName ? ` · ${escapeHtml(folderName)}` : ''}</p>
+        <div class="progress-row">
+          <div class="progress-bar"><span style="width:${progress}%"></span></div>
+          <strong>${formatPercent(progress)}</strong>
+        </div>
+      </div>
+      <div class="doc-card__reorder">
+        <button class="mini-button" data-doc-order="${doc.id}" data-direction="-1" aria-label="Subir">↑</button>
+        <button class="mini-button" data-doc-order="${doc.id}" data-direction="1" aria-label="Bajar">↓</button>
+      </div>
+    </article>
+  `;
+}
+function readerTemplate() {
+  const doc = currentDocument();
+  const token = state.reader.tokens[state.reader.index] ?? null;
+  const display = splitOrpWord(token?.raw ?? '');
+  const progress = doc ? documentProgress({
+    ...doc,
+    currentIndex: state.reader.index
+  }) : 0;
+  const atEnd = state.reader.index >= state.reader.tokens.length;
+
+  return shellTemplate(`
+    <main class="reader">
+      <header class="reader__header">
+        <button class="secondary-button" data-back-library>Biblioteca</button>
+        <div class="reader__title">
+          <strong>${escapeHtml(doc?.title ?? '')}</strong>
+          <span>${formatPercent(progress)}</span>
+        </div>
+      </header>
+
+      <section class="reader__viewport" data-reader-tap>
+        <div class="reader__hint reader__hint--left">−10</div>
+        <div class="reader__hint reader__hint--right">+10</div>
+        <div class="reader__word-wrap">
+          <div class="reader__anchor"></div>
+          <div class="reader__word" aria-live="polite">
+            <span class="reader__left">${escapeHtml(display.left)}</span>
+            <span class="reader__pivot">${escapeHtml(display.pivot)}</span>
+            <span class="reader__right">${escapeHtml(display.right)}</span>
+          </div>
+          <p class="reader__status">${atEnd ? 'Fin del documento' : state.reader.playing ? 'Reproduciendo' : 'Pausado'}</p>
+        </div>
+      </section>
+
+      <section class="reader__controls">
+        <div class="reader__buttons">
+          <button class="secondary-button" data-reader-restart>Inicio</button>
+          <button class="primary-button" data-reader-toggle>${state.reader.playing ? 'Pausa' : 'Play'}</button>
+          <button class="secondary-button" data-reader-skip="-10">−10</button>
+          <button class="secondary-button" data-reader-skip="10">+10</button>
+        </div>
+
+        <div class="speed-panel">
+          <button class="mini-button mini-button--wide" data-speed-step="-20">−</button>
+          <div class="speed-panel__center">
+            <label for="speedRange">${Math.round(state.reader.wpm)} ppm</label>
+            <input id="speedRange" type="range" min="100" max="1000" step="10" value="${Math.round(state.reader.wpm)}" data-speed-range>
+          </div>
+          <button class="mini-button mini-button--wide" data-speed-step="20">+</button>
+        </div>
+      </section>
+    </main>
+  `);
+}
+
+function themeOptionTemplate(value, label) {
+  return `
+    <button class="chip ${state.settings.theme === value ? 'chip--active' : ''}" data-theme-value="${value}">
+      ${label}
+    </button>
+  `;
+}
+
+function sheetTemplate() {
+  if (!state.sheet.type) {
+    return '';
   }
 
-  function hoy() {
-    // Devuelve la fecha de hoy en formato YYYY-MM-DD para los inputs tipo date
-    const d = new Date();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${d.getFullYear()}-${mm}-${dd}`;
+  const { type, data } = state.sheet;
+
+  if (type === 'settings') {
+    return `
+      <div class="sheet-backdrop" data-close-sheet>
+        <section class="sheet" onclick="event.stopPropagation()">
+          <div class="sheet__header">
+            <h2>Ajustes</h2>
+            <button class="icon-button" data-close-sheet>✕</button>
+          </div>
+          <label class="field">
+            <span>Velocidad por defecto</span>
+            <input id="settingsDefaultWpm" type="range" min="100" max="1000" step="10" value="${state.settings.defaultWpm}">
+            <strong>${state.settings.defaultWpm} ppm</strong>
+          </label>
+          <div class="field">
+            <span>Tema</span>
+            <div class="chip-row">
+              ${themeOptionTemplate('dark', 'Oscuro')}
+              ${themeOptionTemplate('light', 'Claro')}
+              ${themeOptionTemplate('auto', 'Auto')}
+            </div>
+          </div>
+          <label class="field">
+            <span>Tamaño de fuente</span>
+            <input id="settingsFontSize" type="range" min="40" max="120" step="2" value="${state.settings.fontSize}">
+            <strong>${state.settings.fontSize}px</strong>
+          </label>
+          <label class="field">
+            <span>Color ORP</span>
+            <input id="settingsOrpColor" type="color" value="${state.settings.orpColor}">
+          </label>
+          <button class="primary-button" data-save-settings>Guardar ajustes</button>
+        </section>
+      </div>
+    `;
   }
 
-  function formatearFecha(iso) {
-    if (!iso) return '';
-    const [y, m, d] = iso.split('-');
-    return `${d}/${m}/${y}`;
+  if (type === 'doc-actions') {
+    const doc = state.documents.find((item) => item.id === data.documentId);
+    if (!doc) {
+      return '';
+    }
+
+    return `
+      <div class="sheet-backdrop" data-close-sheet>
+        <section class="sheet sheet--compact" onclick="event.stopPropagation()">
+          <div class="sheet__header">
+            <h2>${escapeHtml(doc.title)}</h2>
+            <button class="icon-button" data-close-sheet>✕</button>
+          </div>
+          <button class="sheet-action" data-doc-rename="${doc.id}">Renombrar</button>
+          <button class="sheet-action" data-doc-move="${doc.id}">Mover a carpeta</button>
+          <button class="sheet-action sheet-action--danger" data-doc-delete="${doc.id}">Eliminar</button>
+        </section>
+      </div>
+    `;
   }
 
-  function formatearMonto(n) {
-    return '$' + parseFloat(n || 0).toFixed(2);
+  if (type === 'folder-actions') {
+    const folder = state.folders.find((item) => item.id === data.folderId);
+    if (!folder) {
+      return '';
+    }
+
+    return `
+      <div class="sheet-backdrop" data-close-sheet>
+        <section class="sheet sheet--compact" onclick="event.stopPropagation()">
+          <div class="sheet__header">
+            <h2>${escapeHtml(folder.name)}</h2>
+            <button class="icon-button" data-close-sheet>✕</button>
+          </div>
+          <button class="sheet-action" data-folder-rename="${folder.id}">Renombrar</button>
+          <button class="sheet-action sheet-action--danger" data-folder-delete="${folder.id}">Eliminar</button>
+        </section>
+      </div>
+    `;
   }
 
-  /* =====================================================
-     DB — Capa de acceso a localStorage
-     ===================================================== */
-  const DB = {
-    obtener(clave) {
-      try { return JSON.parse(localStorage.getItem(clave)) || []; }
-      catch { return []; }
-    },
-    guardar(clave, datos) {
-      localStorage.setItem(clave, JSON.stringify(datos));
-    },
-    obtenerConfig() {
-      try {
-        const cfg = JSON.parse(localStorage.getItem('config'));
-        return cfg || { precio: 0, tema: 'claro', colores: {} };
-      } catch {
-        return { precio: 0, tema: 'claro', colores: {} };
-      }
-    },
-    guardarConfig(cfg) {
-      localStorage.setItem('config', JSON.stringify(cfg));
+  if (type === 'move-doc') {
+    const doc = state.documents.find((item) => item.id === data.documentId);
+    if (!doc) {
+      return '';
     }
-  };
 
-  /* =====================================================
-     TEMAS — Aplica variables CSS al elemento <html>
-     ===================================================== */
-  const Temas = {
-    aplicar(tema, colores) {
-      document.documentElement.setAttribute('data-tema', tema);
-
-      if (tema === 'personalizado' && colores && colores.primario) {
-        // Para el tema personalizado inyectamos variables inline en <html>
-        const lum = this.luminancia(colores.fondo || '#F9F7F4');
-        const textoClr  = lum > 0.5 ? '#2C2C2C' : '#E4EAF0';
-        const cardClr   = lum > 0.5 ? '#FFFFFF'  : '#182230';
-
-        document.documentElement.style.setProperty('--bg',       colores.fondo    || '#F9F7F4');
-        document.documentElement.style.setProperty('--primario', colores.primario || '#1B4F72');
-        document.documentElement.style.setProperty('--acento',   colores.acento   || '#E69B2F');
-        document.documentElement.style.setProperty('--texto',    textoClr);
-        document.documentElement.style.setProperty('--bg-card',  cardClr);
-        document.documentElement.style.setProperty('--bg-nav',   cardClr);
-      } else {
-        // Limpiamos inline para que el CSS tome el control del tema claro/oscuro
-        ['--bg','--primario','--acento','--texto','--bg-card','--bg-nav'].forEach(v => {
-          document.documentElement.style.removeProperty(v);
-        });
-      }
-
-      // Si el dashboard está visible lo redibujamos para que tome los nuevos colores
-      if (!document.getElementById('vistaDashboard').classList.contains('oculta')) {
-        Dashboard.renderizarGraficos();
-      }
-    },
-
-    // Fórmula de luminancia perceptual para calcular si el fondo es claro u oscuro
-    luminancia(hex) {
-      const r = parseInt(hex.slice(1, 3), 16) / 255;
-      const g = parseInt(hex.slice(3, 5), 16) / 255;
-      const b = parseInt(hex.slice(5, 7), 16) / 255;
-      return 0.299 * r + 0.587 * g + 0.114 * b;
-    }
-  };
-
-  /* =====================================================
-     CONFIG — Inicializa y actualiza la configuración
-     ===================================================== */
-  const Config = {
-    init() {
-      const cfg = DB.obtenerConfig();
-      Temas.aplicar(cfg.tema || 'claro', cfg.colores);
-      this.actualizarTextoPrecio();
-
-      // Marcar el botón de tema que está activo
-      document.querySelectorAll('[data-tema-btn]').forEach(btn => {
-        btn.classList.toggle('activo', btn.dataset.temaBtn === (cfg.tema || 'claro'));
-      });
-
-      // Si el tema guardado es personalizado, mostrar panel con los colores guardados
-      if (cfg.tema === 'personalizado' && cfg.colores) {
-        document.getElementById('panelColores').classList.remove('oculta');
-        if (cfg.colores.primario) document.getElementById('colorPrimario').value = cfg.colores.primario;
-        if (cfg.colores.fondo)    document.getElementById('colorFondo').value    = cfg.colores.fondo;
-        if (cfg.colores.acento)   document.getElementById('colorAcento').value   = cfg.colores.acento;
-      }
-    },
-    actualizarTextoPrecio() {
-      const cfg = DB.obtenerConfig();
-      document.getElementById('precioActualTexto').textContent =
-        cfg.precio ? `Precio actual: ${formatearMonto(cfg.precio)}` : 'Sin precio configurado';
-      document.getElementById('configPrecio').value = cfg.precio || '';
-    }
-  };
-
-  /* =====================================================
-     DASHBOARD
-     ===================================================== */
-  const Dashboard = {
-    periodoActivo: 'semana',
-
-    init() { this.renderizar(); },
-
-    renderizar() {
-      const periodo = this.periodoActivo;
-      const ahora   = new Date();
-
-      // Función de filtro reutilizable según período activo
-      const filtrar = (arr) => arr.filter(item => {
-        const f = new Date(item.fecha + 'T00:00:00');
-        if (periodo === 'semana') {
-          const hace6 = new Date(ahora);
-          hace6.setDate(ahora.getDate() - 6);
-          hace6.setHours(0, 0, 0, 0);
-          return f >= hace6;
-        }
-        if (periodo === 'mes') {
-          return f.getFullYear() === ahora.getFullYear() && f.getMonth() === ahora.getMonth();
-        }
-        return true; // 'todo'
-      });
-
-      const gastosFiltrados    = filtrar(DB.obtener('gastos'));
-      const ventasFiltradas    = filtrar(DB.obtener('ventas'));
-      const pedidosCobrados    = filtrar(DB.obtener('pedidos')).filter(p => p.estado === 'cobrado');
-      const produccionFiltrada = filtrar(DB.obtener('produccion'));
-
-      const totalIngresos = ventasFiltradas.reduce((s, v) => s + parseFloat(v.ingreso || 0), 0)
-                          + pedidosCobrados.reduce((s, p) => s + parseFloat(p.monto  || 0), 0);
-      const totalGastos   = gastosFiltrados.reduce((s, g) => s + parseFloat(g.monto  || 0), 0);
-      const balance       = totalIngresos - totalGastos;
-
-      // Balance card
-      const elBalance = document.getElementById('balanceMonto');
-      elBalance.textContent  = formatearMonto(balance);
-      elBalance.style.color  = balance < 0 ? '#FFB3B3' : '#fff';
-
-      // Métricas
-      document.getElementById('metricaProducidas').textContent =
-        produccionFiltrada.reduce((s, p) => s + parseInt(p.unidades || 0), 0);
-      document.getElementById('metricaVendidas').textContent =
-        ventasFiltradas.reduce((s, v) => s + parseInt(v.unidades || 0), 0);
-      document.getElementById('metricaGastado').textContent =
-        '$' + totalGastos.toFixed(0);
-
-      this.renderizarGraficos();
-    },
-
-    renderizarGraficos() {
-      this.dibujarBarras();
-      this.dibujarPastel();
-    },
-
-    // Lee el valor actual de una variable CSS para usarlo en Canvas
-    cssVar(nombre) {
-      return getComputedStyle(document.documentElement).getPropertyValue(nombre).trim();
-    },
-
-    dibujarBarras() {
-      const canvas = document.getElementById('canvasBarras');
-      // Ajustamos el ancho real del canvas al ancho del contenedor antes de dibujar
-      canvas.width  = canvas.offsetWidth || 320;
-      canvas.height = 210;
-      const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      const gastos  = DB.obtener('gastos');
-      const ventas  = DB.obtener('ventas');
-      const pedidos = DB.obtener('pedidos');
-      const periodo = this.periodoActivo;
-      const ahora   = new Date();
-
-      const labels = [], datosIng = [], datosGas = [];
-
-      if (periodo === 'semana') {
-        const dias = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
-        for (let i = 6; i >= 0; i--) {
-          const d = new Date(ahora);
-          d.setDate(ahora.getDate() - i);
-          const iso = d.toISOString().split('T')[0];
-          labels.push(dias[d.getDay()]);
-          datosIng.push(
-            ventas.filter(v => v.fecha === iso).reduce((s, v) => s + parseFloat(v.ingreso || 0), 0) +
-            pedidos.filter(p => p.fecha === iso && p.estado === 'cobrado').reduce((s, p) => s + parseFloat(p.monto || 0), 0)
-          );
-          datosGas.push(gastos.filter(g => g.fecha === iso).reduce((s, g) => s + parseFloat(g.monto || 0), 0));
-        }
-      } else if (periodo === 'mes') {
-        const diasEnMes = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 0).getDate();
-        for (let sem = 0; sem < 4; sem++) {
-          labels.push('Sem ' + (sem + 1));
-          const ini = new Date(ahora.getFullYear(), ahora.getMonth(), 1 + sem * 7);
-          const fin = new Date(ahora.getFullYear(), ahora.getMonth(), Math.min((sem + 1) * 7, diasEnMes));
-          const enRango = arr => arr.filter(x => {
-            const f = new Date(x.fecha + 'T00:00:00');
-            return f >= ini && f <= fin;
-          });
-          datosIng.push(
-            enRango(ventas).reduce((s, v) => s + parseFloat(v.ingreso || 0), 0) +
-            enRango(pedidos).filter(p => p.estado === 'cobrado').reduce((s, p) => s + parseFloat(p.monto || 0), 0)
-          );
-          datosGas.push(enRango(gastos).reduce((s, g) => s + parseFloat(g.monto || 0), 0));
-        }
-      } else {
-        const meses = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-        for (let i = 5; i >= 0; i--) {
-          const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1);
-          labels.push(meses[d.getMonth()]);
-          const enMes = arr => arr.filter(x => {
-            const f = new Date(x.fecha + 'T00:00:00');
-            return f.getFullYear() === d.getFullYear() && f.getMonth() === d.getMonth();
-          });
-          datosIng.push(
-            enMes(ventas).reduce((s, v) => s + parseFloat(v.ingreso || 0), 0) +
-            enMes(pedidos).filter(p => p.estado === 'cobrado').reduce((s, p) => s + parseFloat(p.monto || 0), 0)
-          );
-          datosGas.push(enMes(gastos).reduce((s, g) => s + parseFloat(g.monto || 0), 0));
-        }
-      }
-
-      // ---- Dibujar ----
-      const W = canvas.width, H = canvas.height;
-      const padL = 42, padR = 10, padT = 12, padB = 28;
-      const areaW = W - padL - padR;
-      const areaH = H - padT - padB;
-      const n = labels.length;
-      const grupoW = areaW / n;
-      const barW   = grupoW * 0.33;
-      const maxVal = Math.max(...datosIng, ...datosGas, 1);
-
-      const cTextoSuave = this.cssVar('--texto-suave');
-      const cBorde      = this.cssVar('--borde');
-
-      // Líneas horizontales de referencia
-      ctx.lineWidth   = 0.5;
-      ctx.strokeStyle = cBorde;
-      ctx.font        = '9px sans-serif';
-      ctx.fillStyle   = cTextoSuave;
-      for (let i = 0; i <= 4; i++) {
-        const y   = padT + (areaH / 4) * i;
-        const val = maxVal - (maxVal / 4) * i;
-        ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-        ctx.textAlign = 'right';
-        ctx.fillText(val > 999 ? (val / 1000).toFixed(1) + 'k' : val.toFixed(0), padL - 4, y + 3);
-      }
-
-      // Barras
-      for (let i = 0; i < n; i++) {
-        const cx = padL + grupoW * i + grupoW / 2;
-
-        // Barra ingresos (verde, izquierda del centro)
-        const ingH = Math.max((datosIng[i] / maxVal) * areaH, 1);
-        ctx.fillStyle = '#27AE60';
-        this.rectRedondeado(ctx, cx - barW - 2, padT + areaH - ingH, barW, ingH, 3);
-
-        // Barra gastos (roja, derecha del centro)
-        const gasH = Math.max((datosGas[i] / maxVal) * areaH, 1);
-        ctx.fillStyle = '#E74C3C';
-        this.rectRedondeado(ctx, cx + 2, padT + areaH - gasH, barW, gasH, 3);
-
-        // Etiqueta eje X
-        ctx.fillStyle   = cTextoSuave;
-        ctx.font        = '9px sans-serif';
-        ctx.textAlign   = 'center';
-        ctx.fillText(labels[i], cx, H - padB + 14);
-      }
-    },
-
-    // Helper para barras con esquinas redondeadas en la parte superior
-    // Compatible con WebViews que no tienen roundRect nativo
-    rectRedondeado(ctx, x, y, w, h, r) {
-      if (h < r) r = h;
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.lineTo(x + w - r, y);
-      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-      ctx.lineTo(x + w, y + h);
-      ctx.lineTo(x, y + h);
-      ctx.lineTo(x, y + r);
-      ctx.quadraticCurveTo(x, y, x + r, y);
-      ctx.closePath();
-      ctx.fill();
-    },
-
-    dibujarPastel() {
-      const canvas = document.getElementById('canvasPastel');
-      canvas.width  = canvas.offsetWidth || 320;
-      canvas.height = 200;
-      const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      const ventas    = DB.obtener('ventas');
-      const pedidos   = DB.obtener('pedidos');
-      const mensajeria = DB.obtener('mensajeria');
-      const periodo   = this.periodoActivo;
-      const ahora     = new Date();
-
-      const filtrar = arr => arr.filter(item => {
-        const f = new Date(item.fecha + 'T00:00:00');
-        if (periodo === 'semana') {
-          const hace6 = new Date(ahora); hace6.setDate(ahora.getDate() - 6); hace6.setHours(0,0,0,0);
-          return f >= hace6;
-        }
-        if (periodo === 'mes') {
-          return f.getFullYear() === ahora.getFullYear() && f.getMonth() === ahora.getMonth();
-        }
-        return true;
-      });
-
-      const totalVentas    = filtrar(ventas).reduce((s, v) => s + parseFloat(v.ingreso || 0), 0);
-      // Mensajería no tiene monto — usamos unidades como medida comparativa
-      const totalMensajeria = filtrar(mensajeria).reduce((s, m) => s + parseInt(m.unidades || 0), 0);
-      const totalPedidos   = filtrar(pedidos).filter(p => p.estado === 'cobrado').reduce((s, p) => s + parseFloat(p.monto || 0), 0);
-
-      const secciones = [
-        { label: 'Ventas',    valor: totalVentas,     color: '#27AE60' },
-        { label: 'Mensajería', valor: totalMensajeria, color: '#4A9EDB' },
-        { label: 'Pedidos',   valor: totalPedidos,    color: '#E69B2F' },
-      ].filter(s => s.valor > 0);
-
-      const leyenda = document.getElementById('leyendaPastel');
-      leyenda.innerHTML = '';
-
-      if (secciones.length === 0) {
-        ctx.fillStyle = this.cssVar('--texto-suave');
-        ctx.font = '13px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Sin datos en este período', canvas.width / 2, canvas.height / 2);
-        return;
-      }
-
-      const total = secciones.reduce((s, sec) => s + sec.valor, 0);
-      const cx = canvas.width / 2;
-      const cy = canvas.height / 2;
-      const r  = Math.min(cx, cy) - 14;
-      const cardColor = this.cssVar('--bg-card');
-
-      let angulo = -Math.PI / 2;
-      secciones.forEach(sec => {
-        const delta = (sec.valor / total) * 2 * Math.PI;
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.arc(cx, cy, r, angulo, angulo + delta);
-        ctx.closePath();
-        ctx.fillStyle   = sec.color;
-        ctx.fill();
-        // Separador entre secciones
-        ctx.strokeStyle = cardColor;
-        ctx.lineWidth   = 2;
-        ctx.stroke();
-        angulo += delta;
-
-        // Leyenda debajo del canvas
-        const item = document.createElement('div');
-        item.className = 'leyenda-pastel__item';
-        item.innerHTML = `<span class="leyenda-pastel__color" style="background:${sec.color}"></span>
-          ${sec.label} (${((sec.valor / total) * 100).toFixed(0)}%)`;
-        leyenda.appendChild(item);
-      });
-    }
-  };
-
-  /* =====================================================
-     GASTOS
-     ===================================================== */
-  const Gastos = {
-    init() {
-      document.getElementById('gastoFecha').value = hoy();
-      this.renderizarLista();
-    },
-    guardar() {
-      const desc  = document.getElementById('gastoDesc').value.trim();
-      const monto = parseFloat(document.getElementById('gastoMonto').value);
-      const fecha = document.getElementById('gastoFecha').value;
-      if (!desc || isNaN(monto) || monto <= 0 || !fecha) {
-        return alert('Completa descripción, monto y fecha');
-      }
-      const lista = DB.obtener('gastos');
-      lista.push({ id: generarId(), fecha, descripcion: desc, monto });
-      DB.guardar('gastos', lista);
-      document.getElementById('gastoDesc').value  = '';
-      document.getElementById('gastoMonto').value = '';
-      this.renderizarLista();
-    },
-    eliminar(id) {
-      DB.guardar('gastos', DB.obtener('gastos').filter(g => g.id !== id));
-      this.renderizarLista();
-    },
-    renderizarLista() {
-      const lista  = document.getElementById('listaGastos');
-      const gastos = DB.obtener('gastos').slice().reverse();
-      if (!gastos.length) { lista.innerHTML = '<p style="color:var(--texto-suave);font-size:0.82rem;padding:8px 0">Sin gastos registrados</p>'; return; }
-      lista.innerHTML = gastos.map(g => `
-        <div class="item-lista">
-          <div class="item-lista__info">
-            <span class="item-lista__desc">${g.descripcion}</span>
-            <span class="item-lista__fecha">${formatearFecha(g.fecha)}</span>
+    return `
+      <div class="sheet-backdrop" data-close-sheet>
+        <section class="sheet sheet--compact" onclick="event.stopPropagation()">
+          <div class="sheet__header">
+            <h2>Mover archivo</h2>
+            <button class="icon-button" data-close-sheet>✕</button>
           </div>
-          <div class="item-lista__acciones">
-            <button class="item-lista__eliminar" data-tipo="gasto" data-id="${g.id}">✕</button>
-            <span class="item-lista__monto item-lista__monto--neg">${formatearMonto(g.monto)}</span>
-          </div>
-        </div>
-      `).join('');
-    }
-  };
-
-  /* =====================================================
-     PRODUCCIÓN
-     ===================================================== */
-  const Produccion = {
-    init() {
-      document.getElementById('prodFecha').value = hoy();
-      this.renderizarLista();
-    },
-    guardar() {
-      const unidades = parseInt(document.getElementById('prodUnidades').value);
-      const fecha    = document.getElementById('prodFecha').value;
-      if (!unidades || unidades <= 0 || !fecha) return alert('Ingresa unidades y fecha');
-      const lista = DB.obtener('produccion');
-      lista.push({ id: generarId(), fecha, unidades });
-      DB.guardar('produccion', lista);
-      document.getElementById('prodUnidades').value = '';
-      this.renderizarLista();
-    },
-    eliminar(id) {
-      DB.guardar('produccion', DB.obtener('produccion').filter(p => p.id !== id));
-      this.renderizarLista();
-    },
-    renderizarLista() {
-      const lista = document.getElementById('listaProduccion');
-      const prod  = DB.obtener('produccion').slice().reverse();
-      if (!prod.length) { lista.innerHTML = '<p style="color:var(--texto-suave);font-size:0.82rem;padding:8px 0">Sin tandas registradas</p>'; return; }
-      lista.innerHTML = prod.map(p => `
-        <div class="item-lista">
-          <div class="item-lista__info">
-            <span class="item-lista__desc">Tanda de producción</span>
-            <span class="item-lista__fecha">${formatearFecha(p.fecha)}</span>
-          </div>
-          <div class="item-lista__acciones">
-            <button class="item-lista__eliminar" data-tipo="produccion" data-id="${p.id}">✕</button>
-            <span class="item-lista__monto item-lista__monto--prim">${p.unidades} u.</span>
-          </div>
-        </div>
-      `).join('');
-    }
-  };
-
-  /* =====================================================
-     VENTAS
-     ===================================================== */
-  const Ventas = {
-    categoriaActiva: 'directa',
-
-    init() {
-      this.mostrarCategoria(this.categoriaActiva);
-    },
-    mostrarCategoria(categoria) {
-      const categoriasValidas = ['directa', 'mensajeria', 'pedidos'];
-      this.categoriaActiva = categoriasValidas.includes(categoria) ? categoria : 'directa';
-
-      document.querySelectorAll('.pestanas-ventas .filtro-btn').forEach(btn => {
-        btn.classList.toggle('activo', btn.dataset.categoriaVenta === this.categoriaActiva);
-      });
-
-      document.getElementById('subvistaVentaDirecta').classList.toggle('oculta', this.categoriaActiva !== 'directa');
-      document.getElementById('subvistaMensajeria').classList.toggle('oculta', this.categoriaActiva !== 'mensajeria');
-      document.getElementById('subvistaPedidos').classList.toggle('oculta', this.categoriaActiva !== 'pedidos');
-
-      if (this.categoriaActiva === 'directa') {
-        document.getElementById('ventaFecha').value = hoy();
-        this.renderizarLista();
-        return;
-      }
-      if (this.categoriaActiva === 'mensajeria') {
-        Mensajeria.init();
-        return;
-      }
-      Pedidos.init();
-    },
-    actualizarSugerencia() {
-      const cfg      = DB.obtenerConfig();
-      const unidades = parseInt(document.getElementById('ventaUnidades').value) || 0;
-      const el       = document.getElementById('sugerenciaPrecio');
-      el.textContent = (cfg.precio && unidades > 0)
-        ? `Precio sugerido: ${formatearMonto(cfg.precio * unidades)}`
-        : '';
-    },
-    guardar() {
-      const unidades = parseInt(document.getElementById('ventaUnidades').value);
-      const ingreso  = parseFloat(document.getElementById('ventaIngreso').value);
-      const fecha    = document.getElementById('ventaFecha').value;
-      if (!unidades || unidades <= 0 || isNaN(ingreso) || ingreso < 0 || !fecha) {
-        return alert('Completa unidades, ingreso y fecha');
-      }
-      const lista = DB.obtener('ventas');
-      lista.push({ id: generarId(), fecha, unidades, ingreso });
-      DB.guardar('ventas', lista);
-      document.getElementById('ventaUnidades').value = '';
-      document.getElementById('ventaIngreso').value  = '';
-      document.getElementById('sugerenciaPrecio').textContent = '';
-      this.renderizarLista();
-    },
-    eliminar(id) {
-      DB.guardar('ventas', DB.obtener('ventas').filter(v => v.id !== id));
-      this.renderizarLista();
-    },
-    renderizarLista() {
-      const lista  = document.getElementById('listaVentas');
-      const ventas = DB.obtener('ventas').slice().reverse();
-      if (!ventas.length) { lista.innerHTML = '<p style="color:var(--texto-suave);font-size:0.82rem;padding:8px 0">Sin ventas registradas</p>'; return; }
-      lista.innerHTML = ventas.map(v => `
-        <div class="item-lista">
-          <div class="item-lista__info">
-            <span class="item-lista__desc">${v.unidades} unidades</span>
-            <span class="item-lista__fecha">${formatearFecha(v.fecha)}</span>
-          </div>
-          <div class="item-lista__acciones">
-            <button class="item-lista__eliminar" data-tipo="venta" data-id="${v.id}">✕</button>
-            <span class="item-lista__monto item-lista__monto--pos">${formatearMonto(v.ingreso)}</span>
-          </div>
-        </div>
-      `).join('');
-    }
-  };
-
-  /* =====================================================
-     MENSAJERÍA
-     ===================================================== */
-  const Mensajeria = {
-    init() {
-      document.getElementById('mensFecha').value = hoy();
-      this.renderizarLista();
-    },
-    guardar() {
-      const desc      = document.getElementById('mensDesc').value.trim();
-      const unidades  = parseInt(document.getElementById('mensUnidades').value);
-      const nombre    = document.getElementById('mensNombre').value.trim();
-      const telefono  = document.getElementById('mensTelefono').value.trim();
-      const fecha     = document.getElementById('mensFecha').value;
-      if (!desc || !unidades || unidades <= 0 || !fecha) {
-        return alert('Completa descripción, unidades y fecha');
-      }
-      const lista = DB.obtener('mensajeria');
-      lista.push({ id: generarId(), fecha, descripcion: desc, unidades, nombre, telefono, estado: 'pendiente' });
-      DB.guardar('mensajeria', lista);
-      document.getElementById('mensDesc').value     = '';
-      document.getElementById('mensUnidades').value = '';
-      document.getElementById('mensNombre').value   = '';
-      document.getElementById('mensTelefono').value = '';
-      this.renderizarLista();
-    },
-    completar(id) {
-      const lista = DB.obtener('mensajeria');
-      const idx   = lista.findIndex(m => m.id === id);
-      if (idx >= 0) { lista[idx].estado = 'completado'; DB.guardar('mensajeria', lista); }
-      this.renderizarLista();
-    },
-    eliminar(id) {
-      DB.guardar('mensajeria', DB.obtener('mensajeria').filter(m => m.id !== id));
-      this.renderizarLista();
-    },
-    renderizarLista() {
-      const lista      = document.getElementById('listaMensajeria');
-      const mens       = DB.obtener('mensajeria');
-      const pendientes = mens.filter(m => m.estado === 'pendiente').reverse();
-      const completados = mens.filter(m => m.estado === 'completado').reverse();
-
-      // Recordamos si la sección completados estaba abierta antes de rerenderizar
-      const elComp    = document.getElementById('colMensCompletados');
-      const compAbierto = elComp ? !elComp.classList.contains('oculta') : false;
-
-      const itemHTML = (m, mostrarCompletar) => `
-        <div class="item-lista">
-          <div class="item-lista__info">
-            <span class="item-lista__desc">${m.descripcion}</span>
-            ${m.nombre ? `<span class="item-lista__fecha">${m.nombre}${m.telefono ? ' · ' + m.telefono : ''}</span>` : ''}
-            <span class="item-lista__fecha">${m.unidades} u. · ${formatearFecha(m.fecha)}</span>
-          </div>
-          <div class="item-lista__acciones">
-            <button class="item-lista__eliminar" data-tipo="mensajeria" data-id="${m.id}">✕</button>
-            ${mostrarCompletar
-              ? `<button class="btn-estado" data-accion="completarMens" data-id="${m.id}">Completar</button>`
-              : ''}
-          </div>
-        </div>
-      `;
-
-      lista.innerHTML = `
-        <p class="seccion-pendientes__titulo">Pendientes</p>
-        ${pendientes.length
-          ? pendientes.map(m => itemHTML(m, true)).join('')
-          : '<p style="color:var(--texto-suave);font-size:0.82rem;padding:8px 0">Sin pendientes</p>'}
-        <div class="seccion-colapsable">
-          <div class="seccion-colapsable__header${compAbierto ? ' abierto' : ''}" data-colapsar="colMensCompletados">
-            <span class="seccion-colapsable__titulo">Completados (${completados.length})</span>
-            <span class="seccion-colapsable__chevron">▼</span>
-          </div>
-          <div id="colMensCompletados" class="${compAbierto ? '' : 'oculta'}">
-            ${completados.length
-              ? completados.map(m => itemHTML(m, false)).join('')
-              : '<p style="color:var(--texto-suave);font-size:0.82rem;padding:8px 0">Sin completados</p>'}
-          </div>
-        </div>
-      `;
-    }
-  };
-
-  /* =====================================================
-     PEDIDOS ESPECIALES
-     ===================================================== */
-  const Pedidos = {
-    init() {
-      document.getElementById('pedFecha').value = hoy();
-      this.renderizarLista();
-    },
-    guardar() {
-      const desc     = document.getElementById('pedDesc').value.trim();
-      const unidades = parseInt(document.getElementById('pedUnidades').value);
-      const monto    = parseFloat(document.getElementById('pedMonto').value);
-      const nombre   = document.getElementById('pedNombre').value.trim();
-      const telefono = document.getElementById('pedTelefono').value.trim();
-      const fecha    = document.getElementById('pedFecha').value;
-      if (!desc || !unidades || unidades <= 0 || isNaN(monto) || monto < 0 || !fecha) {
-        return alert('Completa descripción, unidades, monto y fecha');
-      }
-      const lista = DB.obtener('pedidos');
-      lista.push({ id: generarId(), fecha, descripcion: desc, unidades, monto, nombre, telefono, estado: 'pendiente' });
-      DB.guardar('pedidos', lista);
-      ['pedDesc','pedUnidades','pedMonto','pedNombre','pedTelefono'].forEach(id => {
-        document.getElementById(id).value = '';
-      });
-      this.renderizarLista();
-    },
-    avanzarEstado(id) {
-      const lista = DB.obtener('pedidos');
-      const idx   = lista.findIndex(p => p.id === id);
-      if (idx < 0) return;
-      // pendiente → completado → cobrado
-      if (lista[idx].estado === 'pendiente')   lista[idx].estado = 'completado';
-      else if (lista[idx].estado === 'completado') lista[idx].estado = 'cobrado';
-      DB.guardar('pedidos', lista);
-      this.renderizarLista();
-      // Actualizamos el dashboard si está visible porque los cobrados suman al balance
-      if (!document.getElementById('vistaDashboard').classList.contains('oculta')) {
-        Dashboard.renderizar();
-      }
-    },
-    eliminar(id) {
-      DB.guardar('pedidos', DB.obtener('pedidos').filter(p => p.id !== id));
-      this.renderizarLista();
-    },
-    renderizarLista() {
-      const lista      = document.getElementById('listaPedidos');
-      const peds       = DB.obtener('pedidos');
-      const pendientes = peds.filter(p => p.estado === 'pendiente').reverse();
-      const completados = peds.filter(p => p.estado === 'completado').reverse();
-      const cobrados   = peds.filter(p => p.estado === 'cobrado').reverse();
-
-      const elComp = document.getElementById('colPedCompletados');
-      const elCobr = document.getElementById('colPedCobrados');
-      const compAbierto = elComp ? !elComp.classList.contains('oculta') : false;
-      const cobrAbierto = elCobr ? !elCobr.classList.contains('oculta') : false;
-
-      const itemHTML = (p) => `
-        <div class="item-lista">
-          <div class="item-lista__info">
-            <span class="item-lista__desc">${p.descripcion}</span>
-            ${p.nombre ? `<span class="item-lista__fecha">${p.nombre}${p.telefono ? ' · ' + p.telefono : ''}</span>` : ''}
-            <span class="item-lista__fecha">${p.unidades} u. · ${formatearFecha(p.fecha)}</span>
-            <span class="item-lista__monto item-lista__monto--acento">${formatearMonto(p.monto)}</span>
-          </div>
-          <div class="item-lista__acciones">
-            <button class="item-lista__eliminar" data-tipo="pedido" data-id="${p.id}">✕</button>
-            ${p.estado === 'pendiente'
-              ? `<button class="btn-estado" data-accion="avanzarPed" data-id="${p.id}">Marcar completado</button>`
-              : ''}
-            ${p.estado === 'completado'
-              ? `<button class="btn-estado btn-estado--acento" data-accion="avanzarPed" data-id="${p.id}">Marcar cobrado</button>`
-              : ''}
-          </div>
-        </div>
-      `;
-
-      lista.innerHTML = `
-        <p class="seccion-pendientes__titulo">Pendientes</p>
-        ${pendientes.length
-          ? pendientes.map(itemHTML).join('')
-          : '<p style="color:var(--texto-suave);font-size:0.82rem;padding:8px 0">Sin pendientes</p>'}
-        <div class="seccion-colapsable">
-          <div class="seccion-colapsable__header${compAbierto ? ' abierto' : ''}" data-colapsar="colPedCompletados">
-            <span class="seccion-colapsable__titulo">Completados (${completados.length})</span>
-            <span class="seccion-colapsable__chevron">▼</span>
-          </div>
-          <div id="colPedCompletados" class="${compAbierto ? '' : 'oculta'}">
-            ${completados.length
-              ? completados.map(itemHTML).join('')
-              : '<p style="color:var(--texto-suave);font-size:0.82rem;padding:8px 0">Sin completados</p>'}
-          </div>
-        </div>
-        <div class="seccion-colapsable">
-          <div class="seccion-colapsable__header${cobrAbierto ? ' abierto' : ''}" data-colapsar="colPedCobrados">
-            <span class="seccion-colapsable__titulo">Cobrados (${cobrados.length})</span>
-            <span class="seccion-colapsable__chevron">▼</span>
-          </div>
-          <div id="colPedCobrados" class="${cobrAbierto ? '' : 'oculta'}">
-            ${cobrados.length
-              ? cobrados.map(itemHTML).join('')
-              : '<p style="color:var(--texto-suave);font-size:0.82rem;padding:8px 0">Sin cobrados</p>'}
-          </div>
-        </div>
-      `;
-    }
-  };
-
-  /* =====================================================
-     NAVEGACIÓN
-     ===================================================== */
-  function navegarA(vista) {
-    document.querySelectorAll('.vista').forEach(v => v.classList.add('oculta'));
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('activo'));
-
-    const mapa = {
-      dashboard: 'vistaDashboard',
-      gastos:    'vistaGastos',
-      produccion:'vistaProduccion',
-      ventas:    'vistaVentas',
-    };
-
-    if (!mapa[vista]) return;
-
-    document.getElementById(mapa[vista]).classList.remove('oculta');
-    document.querySelector(`.nav-btn[data-vista="${vista}"]`).classList.add('activo');
-
-    // Inicializar/refrescar según la vista
-    const acciones = {
-      dashboard:  () => Dashboard.init(),
-      gastos:     () => Gastos.init(),
-      produccion: () => Produccion.init(),
-      ventas:     () => Ventas.init(),
-    };
-    if (acciones[vista]) acciones[vista]();
-    document.getElementById('main').scrollTop = 0;
+          <button class="sheet-action" data-move-target="${doc.id}" data-folder-target="">Sin carpeta</button>
+          ${state.folders.map((folder) => `
+            <button class="sheet-action" data-move-target="${doc.id}" data-folder-target="${folder.id}">
+              ${escapeHtml(folder.name)}
+            </button>
+          `).join('')}
+        </section>
+      </div>
+    `;
   }
 
-  /* =====================================================
-     EXPORTAR COPIA DE SEGURIDAD (CSV)
-     ===================================================== */
-  function exportarCSV() {
-    const fechaHoy = hoy().replace(/-/g, '');
-    let csv = 'CroquetApp — Copia de seguridad ' + fechaHoy + '\n';
-
-    const seccion = (nombre, campos, datos) => {
-      csv += `\n### ${nombre} ###\n`;
-      csv += campos.join(',') + '\n';
-      datos.forEach(d => {
-        csv += campos.map(c => `"${d[c] !== undefined ? d[c] : ''}"`).join(',') + '\n';
-      });
-    };
-
-    seccion('GASTOS',    ['fecha','descripcion','monto'],                           DB.obtener('gastos'));
-    seccion('PRODUCCION',['fecha','unidades'],                                      DB.obtener('produccion'));
-    seccion('VENTAS',    ['fecha','unidades','ingreso'],                             DB.obtener('ventas'));
-    seccion('MENSAJERIA',['fecha','descripcion','unidades','nombre','telefono','estado'], DB.obtener('mensajeria'));
-    seccion('PEDIDOS',   ['fecha','descripcion','unidades','monto','nombre','telefono','estado'], DB.obtener('pedidos'));
-
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = `croquetapp-backup-${fechaHoy}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  if (type === 'paste') {
+    return `
+      <div class="sheet-backdrop" data-close-sheet>
+        <section class="sheet" onclick="event.stopPropagation()">
+          <div class="sheet__header">
+            <h2>Pegar texto</h2>
+            <button class="icon-button" data-close-sheet>✕</button>
+          </div>
+          <label class="field">
+            <span>Título</span>
+            <input id="pasteTitle" type="text" maxlength="120" value="${escapeHtml(data?.title ?? '')}">
+          </label>
+          <label class="field">
+            <span>Contenido</span>
+            <textarea id="pasteContent" rows="10" placeholder="Pega aquí el texto">${escapeHtml(data?.content ?? '')}</textarea>
+          </label>
+          <button class="primary-button" data-create-pasted-document>Crear archivo</button>
+        </section>
+      </div>
+    `;
   }
 
-  /* =====================================================
-     EVENT LISTENERS
-     ===================================================== */
+  if (type === 'resume') {
+    const doc = state.documents.find((item) => item.id === data.documentId);
+    if (!doc) {
+      return '';
+    }
 
-  // --- Navegación inferior ---
-  document.getElementById('navBar').addEventListener('click', e => {
-    const btn = e.target.closest('.nav-btn');
-    if (btn) navegarA(btn.dataset.vista);
+    return `
+      <div class="sheet-backdrop" data-close-sheet>
+        <section class="sheet sheet--compact" onclick="event.stopPropagation()">
+          <div class="sheet__header">
+            <h2>${escapeHtml(doc.title)}</h2>
+            <button class="icon-button" data-close-sheet>✕</button>
+          </div>
+          <p class="sheet__text">Hay progreso guardado en ${formatPercent(documentProgress(doc))}.</p>
+          <button class="primary-button" data-resume-document="${doc.id}">Continuar</button>
+          <button class="secondary-button" data-restart-document="${doc.id}">Reiniciar</button>
+        </section>
+      </div>
+    `;
+  }
+
+  return '';
+}
+
+function render() {
+  applyTheme();
+  app.innerHTML = state.view === 'reader' ? readerTemplate() : libraryTemplate();
+  wireLongPress();
+}
+
+function clearReaderTimer() {
+  if (state.reader.timerId) {
+    clearTimeout(state.reader.timerId);
+    state.reader.timerId = null;
+  }
+}
+
+async function persistReaderProgress(force = false) {
+  const doc = currentDocument();
+  if (!doc) {
+    return;
+  }
+
+  const nextIndex = Math.max(0, Math.min(state.reader.index, state.reader.tokens.length));
+  const changedEnough = force || Math.abs(nextIndex - state.reader.lastSavedIndex) >= 5;
+  if (!changedEnough && nextIndex !== 0 && nextIndex !== state.reader.tokens.length) {
+    return;
+  }
+
+  state.reader.lastSavedIndex = nextIndex;
+  const progressPercent = state.reader.tokens.length
+    ? (nextIndex / state.reader.tokens.length) * 100
+    : 0;
+
+  await storage.updateDocument(doc.id, {
+    currentIndex: nextIndex,
+    progressPercent,
+    lastOpenedAt: new Date().toISOString()
   });
+  await refreshLibrary();
+}
 
-  // --- Filtros período dashboard ---
-  document.getElementById('filtrosDashboard').addEventListener('click', e => {
-    const btn = e.target.closest('.filtro-btn');
-    if (!btn) return;
-    document.querySelectorAll('#filtrosDashboard .filtro-btn').forEach(b => b.classList.remove('activo'));
-    btn.classList.add('activo');
-    Dashboard.periodoActivo = btn.dataset.periodo;
-    Dashboard.renderizar();
-  });
-  // --- Categorias de ventas ---
-  document.querySelector('.pestanas-ventas').addEventListener('click', e => {
-    const btn = e.target.closest('.filtro-btn');
-    if (!btn) return;
-    Ventas.mostrarCategoria(btn.dataset.categoriaVenta);
-  });
+function scheduleNextToken() {
+  clearReaderTimer();
+  if (!state.reader.playing) {
+    return;
+  }
 
-  // --- Formularios ---
-  document.getElementById('btnGuardarGasto').addEventListener('click', () => Gastos.guardar());
-  document.getElementById('btnGuardarProd').addEventListener('click',  () => Produccion.guardar());
-  document.getElementById('btnGuardarVenta').addEventListener('click', () => Ventas.guardar());
-  document.getElementById('btnGuardarMens').addEventListener('click',  () => Mensajeria.guardar());
-  document.getElementById('btnGuardarPed').addEventListener('click',   () => Pedidos.guardar());
+  if (state.reader.index >= state.reader.tokens.length) {
+    state.reader.playing = false;
+    render();
+    persistReaderProgress(true);
+    return;
+  }
 
-  // Sugerencia de precio en ventas — listener único aquí para no duplicarlo en cada init()
-  document.getElementById('ventaUnidades').addEventListener('input', () => Ventas.actualizarSugerencia());
+  render();
 
-  // --- Delegación de eventos: eliminar, completar, avanzar estado, colapsar ---
-  document.body.addEventListener('click', e => {
-
-    // Eliminar ítem
-    const btnElim = e.target.closest('.item-lista__eliminar');
-    if (btnElim) {
-      if (!confirm('¿Eliminar este registro?')) return;
-      const { tipo, id } = btnElim.dataset;
-      const destino = { gasto: Gastos, produccion: Produccion, venta: Ventas, mensajeria: Mensajeria, pedido: Pedidos };
-      if (destino[tipo]) destino[tipo].eliminar(id);
+  const currentToken = state.reader.tokens[state.reader.index];
+  state.reader.timerId = setTimeout(async () => {
+    state.reader.index += 1;
+    if (state.reader.index < state.reader.tokens.length) {
+      await persistReaderProgress(false);
+      scheduleNextToken();
       return;
     }
+    state.reader.playing = false;
+    await persistReaderProgress(true);
+    render();
+  }, delayMsForToken(currentToken, state.reader.wpm));
+}
+async function stopReader(forceSave = true) {
+  clearReaderTimer();
+  state.reader.playing = false;
+  if (forceSave) {
+    await persistReaderProgress(true);
+  }
+}
 
-    // Completar encargo de mensajería
-    const btnCompMens = e.target.closest('[data-accion="completarMens"]');
-    if (btnCompMens) { Mensajeria.completar(btnCompMens.dataset.id); return; }
+async function openDocumentForReading(documentId, startFromSaved = true) {
+  const doc = await storage.getDocument(documentId);
+  if (!doc) {
+    return;
+  }
 
-    // Avanzar estado de pedido especial
-    const btnAvPed = e.target.closest('[data-accion="avanzarPed"]');
-    if (btnAvPed) { Pedidos.avanzarEstado(btnAvPed.dataset.id); return; }
+  state.reader.documentId = doc.id;
+  state.reader.tokens = tokenizeText(doc.content);
+  state.reader.index = startFromSaved ? Math.min(doc.currentIndex ?? 0, state.reader.tokens.length) : 0;
+  state.reader.wpm = state.settings.defaultWpm;
+  state.reader.playing = false;
+  state.reader.lastSavedIndex = state.reader.index;
+  state.view = 'reader';
+  closeSheet();
+  render();
+}
 
-    // Colapsar / expandir secciones
-    const headerColapsar = e.target.closest('[data-colapsar]');
-    if (headerColapsar) {
-      const targetId = headerColapsar.dataset.colapsar;
-      const target   = document.getElementById(targetId);
-      if (!target) return;
-      const estaOculto = target.classList.contains('oculta');
-      target.classList.toggle('oculta', !estaOculto);
-      headerColapsar.classList.toggle('abierto', estaOculto);
+async function requestOpenDocument(documentId) {
+  const doc = state.documents.find((item) => item.id === documentId);
+  if (!doc) {
+    return;
+  }
+
+  if (doc.currentIndex > 0 && doc.currentIndex < doc.tokenCount) {
+    showSheet('resume', { documentId });
+    return;
+  }
+
+  await openDocumentForReading(documentId, false);
+}
+
+async function importFile(file) {
+  setBusy(`Procesando ${file.name}...`);
+  try {
+    const parsed = await extractDocument(file);
+    const documentRecord = await storage.createDocument(parsed);
+    await refreshLibrary();
+    clearBusy();
+    toast('Archivo importado.');
+    await openDocumentForReading(documentRecord.id, false);
+  } catch (error) {
+    clearBusy();
+    alert(error.message);
+  }
+}
+
+async function createFolder() {
+  const name = prompt('Nombre de la carpeta');
+  if (!name?.trim()) {
+    return;
+  }
+  await storage.createFolder(name);
+  await refreshLibrary();
+}
+
+async function renameFolder(folderId) {
+  closeSheet();
+  const folder = state.folders.find((item) => item.id === folderId);
+  const name = prompt('Nuevo nombre de la carpeta', folder?.name ?? '');
+  if (!name?.trim()) {
+    return;
+  }
+  await storage.renameFolder(folderId, name);
+  await refreshLibrary();
+}
+
+async function removeFolder(folderId) {
+  closeSheet();
+  if (!confirm('La carpeta se eliminará y sus archivos pasarán a "Sin carpeta".')) {
+    return;
+  }
+  await storage.deleteFolder(folderId);
+  await refreshLibrary();
+}
+
+async function renameDocument(documentId) {
+  closeSheet();
+  const doc = state.documents.find((item) => item.id === documentId);
+  const title = prompt('Nuevo nombre del archivo', doc?.title ?? '');
+  if (!title?.trim()) {
+    return;
+  }
+  await storage.renameDocument(documentId, title);
+  await refreshLibrary();
+}
+
+async function removeDocument(documentId) {
+  closeSheet();
+  if (!confirm('Este archivo se eliminará de la biblioteca.')) {
+    return;
+  }
+  await storage.deleteDocument(documentId);
+  await refreshLibrary();
+}
+
+async function moveDocument(documentId, folderId) {
+  closeSheet();
+  await storage.moveDocument(documentId, folderId || null);
+  await refreshLibrary();
+}
+
+async function saveSettingsFromSheet() {
+  const defaultWpm = Number(document.querySelector('#settingsDefaultWpm')?.value ?? defaultSettings.defaultWpm);
+  const fontSize = Number(document.querySelector('#settingsFontSize')?.value ?? defaultSettings.fontSize);
+  const orpColor = document.querySelector('#settingsOrpColor')?.value ?? defaultSettings.orpColor;
+
+  state.settings = settingsStore.save({
+    ...state.settings,
+    defaultWpm,
+    fontSize,
+    orpColor
+  });
+
+  if (state.view === 'reader') {
+    state.reader.wpm = defaultWpm;
+  }
+
+  closeSheet();
+  render();
+}
+
+async function createDocumentFromPaste() {
+  const title = document.querySelector('#pasteTitle')?.value ?? '';
+  const content = document.querySelector('#pasteContent')?.value ?? '';
+
+  try {
+    const parsed = createPastedDocument(title, content);
+    const documentRecord = await storage.createDocument(parsed);
+    closeSheet();
+    await refreshLibrary();
+    await openDocumentForReading(documentRecord.id, false);
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+function openPasteSheet(prefill = {}) {
+  showSheet('paste', {
+    title: prefill.title ?? '',
+    content: prefill.content ?? ''
+  });
+}
+
+async function handlePasteAction() {
+  try {
+    const clipboardText = await navigator.clipboard.readText();
+    if (clipboardText.trim()) {
+      openPasteSheet({
+        title: `Texto pegado ${new Date().toLocaleString('es-ES')}`,
+        content: clipboardText
+      });
+      return;
     }
-  });
+  } catch {}
 
-  // --- Modal configuración ---
-  document.getElementById('btnConfig').addEventListener('click', () => {
-    Config.actualizarTextoPrecio();
-    document.getElementById('modalOverlay').classList.remove('oculta');
+  openPasteSheet({
+    title: `Texto pegado ${new Date().toLocaleString('es-ES')}`,
+    content: ''
   });
-  document.getElementById('btnCerrarModal').addEventListener('click', () => {
-    document.getElementById('modalOverlay').classList.add('oculta');
-  });
-  // Cerrar al tocar el fondo oscuro
-  document.getElementById('modalOverlay').addEventListener('click', e => {
-    if (e.target === document.getElementById('modalOverlay')) {
-      document.getElementById('modalOverlay').classList.add('oculta');
-    }
-  });
+}
 
-  // --- Guardar precio ---
-  document.getElementById('btnGuardarPrecio').addEventListener('click', () => {
-    const precio = parseFloat(document.getElementById('configPrecio').value);
-    if (isNaN(precio) || precio < 0) return alert('Ingresa un precio válido');
-    const cfg = DB.obtenerConfig();
-    cfg.precio = precio;
-    DB.guardarConfig(cfg);
-    Config.actualizarTextoPrecio();
-    Ventas.actualizarSugerencia();
-  });
+async function backToLibrary() {
+  await stopReader(true);
+  state.view = 'library';
+  render();
+}
 
-  // --- Selector de tema ---
-  document.querySelectorAll('[data-tema-btn]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const tema = btn.dataset.temaBtn;
-      document.querySelectorAll('[data-tema-btn]').forEach(b => b.classList.remove('activo'));
-      btn.classList.add('activo');
-      document.getElementById('panelColores').classList.toggle('oculta', tema !== 'personalizado');
-      const cfg = DB.obtenerConfig();
-      cfg.tema  = tema;
-      DB.guardarConfig(cfg);
-      Temas.aplicar(tema, cfg.colores);
-    });
-  });
+async function togglePlayback() {
+  state.reader.playing = !state.reader.playing;
+  if (state.reader.playing) {
+    scheduleNextToken();
+    return;
+  }
+  await persistReaderProgress(true);
+  render();
+}
 
-  // --- Aplicar colores personalizados ---
-  document.getElementById('btnAplicarColores').addEventListener('click', () => {
-    const colores = {
-      primario: document.getElementById('colorPrimario').value,
-      fondo:    document.getElementById('colorFondo').value,
-      acento:   document.getElementById('colorAcento').value,
+async function restartReader() {
+  await stopReader(false);
+  state.reader.index = 0;
+  state.reader.lastSavedIndex = 0;
+  await persistReaderProgress(true);
+  render();
+}
+
+async function skipWords(amount) {
+  await stopReader(false);
+  state.reader.index = Math.max(0, Math.min(state.reader.index + amount, state.reader.tokens.length));
+  await persistReaderProgress(true);
+  render();
+}
+
+function wireLongPress() {
+  document.querySelectorAll('[data-doc-id]').forEach((element) => {
+    let timer = null;
+    const docId = element.dataset.docId;
+
+    const start = () => {
+      timer = window.setTimeout(() => {
+        state.longPressDocId = docId;
+        showSheet('doc-actions', { documentId: docId });
+      }, 420);
     };
-    const cfg = DB.obtenerConfig();
-    cfg.tema   = 'personalizado';
-    cfg.colores = colores;
-    DB.guardarConfig(cfg);
-    document.querySelectorAll('[data-tema-btn]').forEach(b =>
-      b.classList.toggle('activo', b.dataset.temaBtn === 'personalizado')
-    );
-    Temas.aplicar('personalizado', colores);
+
+    const cancel = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    element.addEventListener('pointerdown', start);
+    element.addEventListener('pointerup', cancel);
+    element.addEventListener('pointerleave', cancel);
+    element.addEventListener('pointercancel', cancel);
   });
+}
 
-  // --- Exportar copia de seguridad ---
-  document.getElementById('btnExportar').addEventListener('click', exportarCSV);
+document.addEventListener('click', async (event) => {
+  const target = event.target;
 
-  /* =====================================================
-     INICIO DE LA APP
-     ===================================================== */
-  Config.init();      // Restaura tema y configuración guardada
-  Dashboard.init();   // Carga el dashboard como pantalla inicial
+  if (target.closest('[data-open-settings]')) {
+    showSheet('settings');
+    return;
+  }
 
+  if (target.closest('[data-close-sheet]')) {
+    closeSheet();
+    return;
+  }
+
+  if (target.closest('[data-import-file]')) {
+    fileInput.click();
+    return;
+  }
+
+  if (target.closest('[data-create-folder]')) {
+    await createFolder();
+    return;
+  }
+
+  if (target.closest('[data-paste-text]')) {
+    await handlePasteAction();
+    return;
+  }
+
+  const docMenu = target.closest('[data-doc-menu]');
+  if (docMenu) {
+    showSheet('doc-actions', { documentId: docMenu.dataset.docMenu });
+    return;
+  }
+
+  const folderMenu = target.closest('[data-folder-menu]');
+  if (folderMenu) {
+    showSheet('folder-actions', { folderId: folderMenu.dataset.folderMenu });
+    return;
+  }
+
+  const docOrder = target.closest('[data-doc-order]');
+  if (docOrder) {
+    await storage.reorderDocument(docOrder.dataset.docOrder, Number(docOrder.dataset.direction));
+    await refreshLibrary();
+    return;
+  }
+
+  const docRename = target.closest('[data-doc-rename]');
+  if (docRename) {
+    await renameDocument(docRename.dataset.docRename);
+    return;
+  }
+
+  const docMove = target.closest('[data-doc-move]');
+  if (docMove) {
+    showSheet('move-doc', { documentId: docMove.dataset.docMove });
+    return;
+  }
+
+  const docDelete = target.closest('[data-doc-delete]');
+  if (docDelete) {
+    await removeDocument(docDelete.dataset.docDelete);
+    return;
+  }
+
+  const folderRename = target.closest('[data-folder-rename]');
+  if (folderRename) {
+    await renameFolder(folderRename.dataset.folderRename);
+    return;
+  }
+
+  const folderDelete = target.closest('[data-folder-delete]');
+  if (folderDelete) {
+    await removeFolder(folderDelete.dataset.folderDelete);
+    return;
+  }
+
+  const moveTarget = target.closest('[data-move-target]');
+  if (moveTarget) {
+    await moveDocument(moveTarget.dataset.moveTarget, moveTarget.dataset.folderTarget || null);
+    return;
+  }
+
+  const resumeButton = target.closest('[data-resume-document]');
+  if (resumeButton) {
+    await openDocumentForReading(resumeButton.dataset.resumeDocument, true);
+    return;
+  }
+
+  const restartButton = target.closest('[data-restart-document]');
+  if (restartButton) {
+    await openDocumentForReading(restartButton.dataset.restartDocument, false);
+    return;
+  }
+
+  if (target.closest('[data-save-settings]')) {
+    await saveSettingsFromSheet();
+    return;
+  }
+
+  const themeButton = target.closest('[data-theme-value]');
+  if (themeButton) {
+    state.settings = {
+      ...state.settings,
+      theme: themeButton.dataset.themeValue
+    };
+    render();
+    return;
+  }
+
+  if (target.closest('[data-create-pasted-document]')) {
+    await createDocumentFromPaste();
+    return;
+  }
+
+  if (target.closest('[data-back-library]')) {
+    await backToLibrary();
+    return;
+  }
+
+  if (target.closest('[data-reader-toggle]')) {
+    await togglePlayback();
+    return;
+  }
+
+  if (target.closest('[data-reader-restart]')) {
+    await restartReader();
+    return;
+  }
+
+  const readerSkip = target.closest('[data-reader-skip]');
+  if (readerSkip) {
+    await skipWords(Number(readerSkip.dataset.readerSkip));
+    return;
+  }
+
+  const speedStep = target.closest('[data-speed-step]');
+  if (speedStep) {
+    state.reader.wpm = Math.max(100, Math.min(1000, state.reader.wpm + Number(speedStep.dataset.speedStep)));
+    render();
+    if (state.reader.playing) {
+      scheduleNextToken();
+    }
+    return;
+  }
+
+  const docCard = target.closest('[data-doc-id]');
+  if (docCard && !target.closest('button')) {
+    const docId = docCard.dataset.docId;
+    if (state.longPressDocId === docId) {
+      state.longPressDocId = null;
+      return;
+    }
+    await requestOpenDocument(docId);
+    return;
+  }
+
+  const readerTap = target.closest('[data-reader-tap]');
+  if (readerTap) {
+    const bounds = readerTap.getBoundingClientRect();
+    const x = event.clientX - bounds.left;
+    const ratio = x / bounds.width;
+
+    if (ratio < 0.3) {
+      await skipWords(-10);
+    } else if (ratio > 0.7) {
+      await skipWords(10);
+    } else {
+      await togglePlayback();
+    }
+  }
 });
+
+document.addEventListener('input', (event) => {
+  const target = event.target;
+  if (target.matches('[data-speed-range]')) {
+    state.reader.wpm = Number(target.value);
+    if (state.reader.playing) {
+      scheduleNextToken();
+    } else {
+      render();
+    }
+    return;
+  }
+
+  if (target.id === 'settingsDefaultWpm') {
+    state.settings = {
+      ...state.settings,
+      defaultWpm: Number(target.value)
+    };
+    render();
+    return;
+  }
+
+  if (target.id === 'settingsFontSize') {
+    state.settings = {
+      ...state.settings,
+      fontSize: Number(target.value)
+    };
+    render();
+  }
+});
+
+fileInput.addEventListener('change', async (event) => {
+  const [file] = event.target.files ?? [];
+  fileInput.value = '';
+  if (!file) {
+    return;
+  }
+  await importFile(file);
+});
+
+prefersDark.addEventListener('change', () => {
+  if (state.settings.theme === 'auto') {
+    applyTheme();
+  }
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && state.view === 'reader') {
+    stopReader(true);
+  }
+});
+
+window.addEventListener('beforeunload', () => {
+  if (state.view === 'reader') {
+    stopReader(true);
+  }
+});
+
+render();
+refreshLibrary();
